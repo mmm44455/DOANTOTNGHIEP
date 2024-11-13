@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+from keras.optimizers import Adam
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import LSTM, Dense, Input, MultiHeadAttention, Dropout, Concatenate
 from sklearn.preprocessing import MinMaxScaler
@@ -11,8 +12,9 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import matplotlib.dates as mdates 
 from keras.layers import Layer
 # Hàm tải dữ liệu huấn luyện
+sequence_length  = 1
 def load_train_data():
-    global X_train, X_test, y_train, y_test, scaler
+    global X,y ,X_train, X_test, y_train, y_test, scaler
     file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
     if file_path:
         data = pd.read_csv(file_path)
@@ -180,17 +182,22 @@ def train_model():
         concat_output = Concatenate()([lstm_out, attention_output])
         lstm_out_attention = LSTM(32)(concat_output)
         output_layer = Dense(7)(lstm_out_attention)
+        model = Model(inputs=input_layer, outputs=output_layer)
     elif selected_model.get()=="GlobalSelfAttention":
         input_layer = Input(shape=(X.shape[1], X.shape[2]))
         lstm_out = LSTM(64, return_sequences=True)(input_layer)
         global_attention_layer = GlobalSelfAttention(d_model=64, num_heads=4)
         attention_output, attention_weights = global_attention_layer(lstm_out, lstm_out, lstm_out)
         concat_output = Concatenate()([lstm_out, attention_output])
-        oput_layer = Dense(7)(concat_output[:, -1, :])
+        output_layer = Dense(7)(concat_output[:, -1, :])
         model = Model(inputs=input_layer, outputs=output_layer)
         
+    if(selected_model.get() == "MultiAttention" or selected_model.get() == "LSTM"):
+        model.compile(optimizer='adam', loss='mse')
+    else:
+        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
 
-    model.compile(optimizer='adam', loss='mse')
+    
     model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test))
     messagebox.showinfo("Thông báo", "Huấn luyện mô hình thành công.")
     show_model_performance()
@@ -223,43 +230,49 @@ def load_predict_data():
         X_new = np.array(X_new)
         Y_new = np.array(Y_new)
         messagebox.showinfo("Thông báo", "Dữ liệu dự đoán đã được tải thành công.")
-
+        
 # Hàm dự đoán và hiển thị kết quả
 def predict_and_show():
     predictions = model.predict(X_new)
-    predictions_original = scaler.inverse_transform(predictions)[:,1]
-    y_test_original = scaler.inverse_transform(Y_new)[:,1]
-
-    min_length = min(len(new_data.index), len(y_test_original), len(predictions_original))
-
-# Cắt ngắn mảng theo độ dài nhỏ nhất
-    dates = new_data.index[:min_length]
-    y_test_new_original = y_test_original[:min_length]
+    predictions_original = scaler.inverse_transform(predictions)[:, 0]
+    y_test_original = scaler.inverse_transform(Y_new)[:, 0]
+    # Hiển thị kết quả dự báo trong bảng
+    # Cắt mảng ngày tháng từ sequence_length
+    dates = new_data.index[sequence_length:]
+    # Đảm bảo độ dài của mảng ngày, thực tế và dự báo khớp
+    min_length = min(len(dates), len(predictions_original), len(y_test_original))
+    dates = dates[:min_length]
     predictions_new_original = predictions_original[:min_length]
-
-    # Vẽ biểu đồ
+    y_test_new_original = y_test_original[:min_length]
+    df_results = pd.DataFrame({
+        'Ngày': dates,
+        'Thực tế': y_test_new_original,
+        'Dự đoán': predictions_new_original
+    })
+    print(df_results)
+def showChart():
+    predictions = model.predict(X_new)
+    predictions_original = scaler.inverse_transform(predictions)[:, 0]
+    y_test_original = scaler.inverse_transform(Y_new)[:, 0]
+    min_length = min(len(new_data.index), len(y_test_original), len(predictions_original))
+    dates = new_data.index[:min_length]
+    dates = pd.to_datetime(dates, format='%d/%m/%Y')
+    predictions_new_original = predictions_original[:min_length]
+    y_test_new_original = y_test_original[:min_length]
+    
     plt.figure(figsize=(14, 5))
     plt.plot(dates, y_test_new_original, label='Thực tế', color='blue')
     plt.plot(dates, predictions_new_original, label='Dự báo', color='red')
     plt.xlabel('Thời gian')
     plt.ylabel('Mực nước')
 
-    # Định dạng ngày tháng
+# Định dạng ngày tháng
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
     plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator())
     plt.legend()
     plt.gcf().autofmt_xdate()
     plt.show()
-
-    # Hiển thị kết quả dự báo trong bảng
-    min_length = min(len(new_data.index[60:]), len(y_test_original), len(predictions_original))
-    df_results = pd.DataFrame({
-        'Ngày': new_data.index[60:][:min_length],
-        'Thực tế': y_test_original[:min_length],
-        'Dự báo': predictions_original[:min_length]
-    })
-    print(df_results)
-
+    
 # Tạo giao diện Tkinter
 root = tk.Tk()
 root.title("Dự đoán Mực nước")
@@ -292,7 +305,10 @@ load_predict_button = tk.Button(root, text="Tải dữ liệu dự đoán", comm
 load_predict_button.pack(pady=5)
 
 # Nút dự đoán
-predict_button = tk.Button(root, text="Dự đoán và hiển thị", command=predict_and_show)
+predict_button = tk.Button(root, text="Bảng dự đoán", command=predict_and_show)
+predict_button.pack(pady=10)
+
+predict_button = tk.Button(root, text="Biểu đồ dự đoán ", command=showChart)
 predict_button.pack(pady=10)
 
 # Chạy giao diện Tkinter
