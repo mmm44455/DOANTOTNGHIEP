@@ -10,6 +10,7 @@ from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import matplotlib.dates as mdates 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from keras.layers import Layer
 # Hàm tải dữ liệu huấn luyện
 sequence_length  = 1
@@ -164,16 +165,22 @@ def train_model():
         # Mô hình MultiAttention
         input_layer = Input(shape=(X_train.shape[1], X_train.shape[2]))
         lstm_out = LSTM(64, return_sequences=True)(input_layer)
-        attention = MultiHeadAttention(num_heads=4, key_dim=64)(lstm_out, lstm_out)
+        attention = MultiHeadAttention(num_heads=10, key_dim=64)(lstm_out, lstm_out)
         concat_output = Concatenate()([lstm_out, attention])
         dropout_layer = Dropout(0.1)(concat_output)
         lstm_out_attention = LSTM(32)(dropout_layer)
         output = Dense(7)(lstm_out_attention)
         model = Model(inputs=input_layer, outputs=output)
+        
     elif selected_model.get() == "LSTM":
-        output_dim = X_train.shape[2]
-        model = Sequential([LSTM(64, input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=False),
-                Dense(output_dim)])
+        model = Sequential()
+        # Lớp đầu vào
+        model.add(LSTM(64, return_sequences=False, input_shape=(X_train.shape[1], X_train.shape[2])))
+        # Lớp Dropout để tránh overfitting
+        model.add(Dropout(0.2))
+        # Lớp đầu ra
+        model.add(Dense(7))
+        
     elif selected_model.get() == "DropAttention":
         input_layer = Input(shape=(X.shape[1], X.shape[2]))
         lstm_out = LSTM(64, return_sequences=True)(input_layer)
@@ -183,6 +190,7 @@ def train_model():
         lstm_out_attention = LSTM(32)(concat_output)
         output_layer = Dense(7)(lstm_out_attention)
         model = Model(inputs=input_layer, outputs=output_layer)
+        
     elif selected_model.get()=="GlobalSelfAttention":
         input_layer = Input(shape=(X.shape[1], X.shape[2]))
         lstm_out = LSTM(64, return_sequences=True)(input_layer)
@@ -191,16 +199,15 @@ def train_model():
         concat_output = Concatenate()([lstm_out, attention_output])
         output_layer = Dense(7)(concat_output[:, -1, :])
         model = Model(inputs=input_layer, outputs=output_layer)
-        
-    if(selected_model.get() == "MultiAttention" or selected_model.get() == "LSTM"):
-        model.compile(optimizer='adam', loss='mse')
-    else:
-        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
-
     
+    if selected_model.get() in ["MultiAttention", "LSTM"]:
+            model.compile(optimizer='adam', loss='mse')
+    else:
+            model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
     model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test))
     messagebox.showinfo("Thông báo", "Huấn luyện mô hình thành công.")
     show_model_performance()
+    
 def nse(y_true, y_pred):
     return 1 - sum((y_true - y_pred)**2) / sum((y_true - np.mean(y_true))**2)
 # Hàm hiển thị chất lượng mô hình
@@ -211,7 +218,7 @@ def show_model_performance():
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     nse_value = nse(y_test.flatten(), y_pred.flatten())
 
-    performance_text.set(f"R²: {r2:.3f} | MAE: {mae:.3f} | RMSE: {rmse:.3f} | NSE :{nse_value:.3f}")
+    performance_text.set(f"R²: {r2} | MAE: {mae} | RMSE: {rmse} | NSE :{nse_value}")
 
 # Hàm tải dữ liệu dự đoán
 def load_predict_data():
@@ -249,7 +256,12 @@ def predict_and_show():
         'Thực tế': y_test_new_original,
         'Dự đoán': predictions_new_original
     })
-    print(df_results)
+    for item in tree.get_children():
+        tree.delete(item)
+
+    # Thêm dữ liệu vào bảng
+    for row in df_results.itertuples():
+        tree.insert("", tk.END, values=row[1:])
 def showChart():
     predictions = model.predict(X_new)
     predictions_original = scaler.inverse_transform(predictions)[:, 0]
@@ -260,18 +272,20 @@ def showChart():
     predictions_new_original = predictions_original[:min_length]
     y_test_new_original = y_test_original[:min_length]
     
-    plt.figure(figsize=(14, 5))
-    plt.plot(dates, y_test_new_original, label='Thực tế', color='blue')
-    plt.plot(dates, predictions_new_original, label='Dự báo', color='red')
-    plt.xlabel('Thời gian')
-    plt.ylabel('Mực nước')
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(dates, y_test_new_original, label='Thực tế', color='blue')
+    ax.plot(dates, predictions_new_original, label='Dự báo', color='red')
+    ax.set_xlabel('Thời gian')
+    ax.set_ylabel('Mực nước')
 
-# Định dạng ngày tháng
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
-    plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator())
-    plt.legend()
-    plt.gcf().autofmt_xdate()
-    plt.show()
+    # Định dạng ngày tháng
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%Y'))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax.legend()
+    fig.autofmt_xdate()
+    canvas = FigureCanvasTkAgg(fig, master=root)  # root là cửa sổ Tkinter
+    canvas.draw()
+    canvas.get_tk_widget().pack()
     
 # Tạo giao diện Tkinter
 root = tk.Tk()
@@ -287,7 +301,7 @@ load_train_button.pack(pady=5)
 
 # Phần chọn mô hình huấn luyện
 selected_model = tk.StringVar(value="MultiAttention")
-model_options = ["MultiAttention", "DropAttention", "GlobalAttention", "LSTM"]
+model_options = ["MultiAttention", "DropAttention", "GlobalSelfAttention", "LSTM"]
 model_menu = ttk.Combobox(root, textvariable=selected_model, values=model_options)
 model_menu.pack(pady=5)
 
@@ -304,9 +318,20 @@ performance_label.pack(pady=5)
 load_predict_button = tk.Button(root, text="Tải dữ liệu dự đoán", command=load_predict_data)
 load_predict_button.pack(pady=5)
 
+tree = ttk.Treeview(root, columns=list(["Ngày", "Thực tế", "Dự đoán"]), show="headings")
+
+# Định nghĩa các cột
+for col in ["Ngày", "Thực tế", "Dự đoán"]:
+    tree.heading(col, text=col)
+    tree.column(col, width=150, anchor='center')
+
+# Đặt Treeview trong cửa sổ
+tree.pack(expand=True, fill='both')
 # Nút dự đoán
 predict_button = tk.Button(root, text="Bảng dự đoán", command=predict_and_show)
 predict_button.pack(pady=10)
+
+
 
 predict_button = tk.Button(root, text="Biểu đồ dự đoán ", command=showChart)
 predict_button.pack(pady=10)
