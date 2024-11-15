@@ -14,6 +14,13 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from keras.layers import Layer
 # Hàm tải dữ liệu huấn luyện
 sequence_length  = 1
+def create_sequences(data, seq_length):
+    sequences = []
+    targets = []
+    for i in range(len(data) - seq_length):
+        sequences.append(data[i:i + seq_length])
+        targets.append(data[i + seq_length, 0])  
+    return np.array(sequences), np.array(targets)
 def load_train_data():
     global X,y ,X_train, X_test, y_train, y_test, scaler
     file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
@@ -25,12 +32,15 @@ def load_train_data():
 
         # Chuẩn bị dữ liệu
         sequence_length = 1
-        X, y = [], []
-        for i in range(sequence_length, len(data_scaled)):
-            X.append(data_scaled[i-sequence_length:i])
-            y.append(data_scaled[i])
+        # X, y = [], []
+        # for i in range(sequence_length, len(data_scaled)):
+        #     X.append(data_scaled[i-sequence_length:i])
+        #     y.append(data_scaled[i])
 
-        X, y = np.array(X), np.array(y)
+        # X, y = np.array(X), np.array(y)
+        
+        X, y = create_sequences(data_scaled, sequence_length)
+        
         train_size = int(len(X) * 0.8)
         X_train, X_test = X[:train_size], X[train_size:]
         y_train, y_test = y[:train_size], y[train_size:]
@@ -165,21 +175,19 @@ def train_model():
         # Mô hình MultiAttention
         input_layer = Input(shape=(X_train.shape[1], X_train.shape[2]))
         lstm_out = LSTM(64, return_sequences=True)(input_layer)
-        attention = MultiHeadAttention(num_heads=10, key_dim=64)(lstm_out, lstm_out)
-        concat_output = Concatenate()([lstm_out, attention])
-        dropout_layer = Dropout(0.1)(concat_output)
-        lstm_out_attention = LSTM(32)(dropout_layer)
-        output = Dense(7)(lstm_out_attention)
+        attention = MultiHeadAttention(num_heads=15, key_dim=64)(lstm_out, lstm_out)
+        dropout_layer = Dropout(0.1)(attention)
+        attention_output = tf.reduce_sum(dropout_layer, axis=1)
+        # lstm_out_attention = LSTM(32)(dropout_layer)
+        output = Dense(1)(attention_output)
         model = Model(inputs=input_layer, outputs=output)
         
     elif selected_model.get() == "LSTM":
         model = Sequential()
         # Lớp đầu vào
         model.add(LSTM(64, return_sequences=False, input_shape=(X_train.shape[1], X_train.shape[2])))
-        # Lớp Dropout để tránh overfitting
-        model.add(Dropout(0.2))
         # Lớp đầu ra
-        model.add(Dense(7))
+        model.add(Dense(1))
         
     elif selected_model.get() == "DropAttention":
         input_layer = Input(shape=(X.shape[1], X.shape[2]))
@@ -204,22 +212,10 @@ def train_model():
             model.compile(optimizer='adam', loss='mse')
     else:
             model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
-    model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test))
+    model.fit(X_train, y_train, epochs=100, batch_size=32, validation_data=(X_test, y_test))
     messagebox.showinfo("Thông báo", "Huấn luyện mô hình thành công.")
     show_model_performance()
     
-def nse(y_true, y_pred):
-    return 1 - sum((y_true - y_pred)**2) / sum((y_true - np.mean(y_true))**2)
-# Hàm hiển thị chất lượng mô hình
-def show_model_performance():
-    y_pred = model.predict(X_test)
-    r2 = r2_score(y_test, y_pred)
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    nse_value = nse(y_test.flatten(), y_pred.flatten())
-
-    performance_text.set(f"R²: {r2} | MAE: {mae} | RMSE: {rmse} | NSE :{nse_value}")
-
 # Hàm tải dữ liệu dự đoán
 def load_predict_data():
     global X_new, Y_new, new_data
