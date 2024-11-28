@@ -12,8 +12,9 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import matplotlib.dates as mdates 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from keras.layers import Layer
+from tensorflow.keras.callbacks import EarlyStopping
 # Hàm tải dữ liệu huấn luyện
-sequence_length  = 1
+sequence_length = 10
 def create_sequences(data, seq_length):
     sequences = []
     targets = []
@@ -29,15 +30,6 @@ def load_train_data():
         data.set_index('Ngay', inplace=True)
         scaler = MinMaxScaler(feature_range=(0, 1))
         data_scaled = scaler.fit_transform(data)
-
-        # Chuẩn bị dữ liệu
-        sequence_length = 1
-        # X, y = [], []
-        # for i in range(sequence_length, len(data_scaled)):
-        #     X.append(data_scaled[i-sequence_length:i])
-        #     y.append(data_scaled[i])
-
-        # X, y = np.array(X), np.array(y)
         
         X, y = create_sequences(data_scaled, sequence_length)
         
@@ -171,23 +163,29 @@ class GlobalSelfAttention(Layer):
 # Hàm tạo và huấn luyện mô hình
 def train_model():
     global model, selected_model
+    early_stopping = EarlyStopping(
+    monitor='val_loss',
+    patience=10,  # Dừng nếu không cải thiện sau 10 epochs
+    restore_best_weights=True
+)
     if selected_model.get() == "MultiAttention":
         # Mô hình MultiAttention
         input_layer = Input(shape=(X_train.shape[1], X_train.shape[2]))
         lstm_out = LSTM(64, return_sequences=True)(input_layer)
         attention = MultiHeadAttention(num_heads=15, key_dim=64)(lstm_out, lstm_out)
         dropout_layer = Dropout(0.1)(attention)
-        attention_output = tf.reduce_sum(dropout_layer, axis=1)
-        # lstm_out_attention = LSTM(32)(dropout_layer)
-        output = Dense(1)(attention_output)
+        lstm_out_attention = LSTM(32)(dropout_layer)
+        output = Dense(1)(lstm_out_attention)
         model = Model(inputs=input_layer, outputs=output)
         
     elif selected_model.get() == "LSTM":
-        model = Sequential()
-        # Lớp đầu vào
-        model.add(LSTM(64, return_sequences=False, input_shape=(X_train.shape[1], X_train.shape[2])))
-        # Lớp đầu ra
-        model.add(Dense(1))
+        model = Sequential([
+                LSTM(64, activation='relu', input_shape=(sequence_length, X.shape[2]), return_sequences=True),
+                Dropout(0.2),
+                LSTM(32, activation='relu', return_sequences=False),
+                Dropout(0.2),
+                Dense(1)  # Dự đoán mực nước (1 giá trị)
+                ])
         
     elif selected_model.get() == "DropAttention":
         input_layer = Input(shape=(X.shape[1], X.shape[2]))
@@ -196,7 +194,7 @@ def train_model():
         attention_output, attention_weights = drop_attention_layer(lstm_out, lstm_out, lstm_out)
         concat_output = Concatenate()([lstm_out, attention_output])
         lstm_out_attention = LSTM(32)(concat_output)
-        output_layer = Dense(7)(lstm_out_attention)
+        output_layer = Dense(1)(lstm_out_attention)
         model = Model(inputs=input_layer, outputs=output_layer)
         
     elif selected_model.get()=="GlobalSelfAttention":
@@ -205,52 +203,78 @@ def train_model():
         global_attention_layer = GlobalSelfAttention(d_model=64, num_heads=4)
         attention_output, attention_weights = global_attention_layer(lstm_out, lstm_out, lstm_out)
         concat_output = Concatenate()([lstm_out, attention_output])
-        output_layer = Dense(7)(concat_output[:, -1, :])
+        output_layer = Dense(1)(concat_output[:, -1, :])
         model = Model(inputs=input_layer, outputs=output_layer)
     
     if selected_model.get() in ["MultiAttention", "LSTM"]:
             model.compile(optimizer='adam', loss='mse')
     else:
             model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
-    model.fit(X_train, y_train, epochs=100, batch_size=32, validation_data=(X_test, y_test))
+    model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test), callbacks=[early_stopping],verbose=1,
+    shuffle=True)
     messagebox.showinfo("Thông báo", "Huấn luyện mô hình thành công.")
     show_model_performance()
-    
+def nse(y_true, y_pred):
+    return 1 - sum((y_true - y_pred)**2) / sum((y_true - np.mean(y_true))**2)
+# Hàm hiển thị chất lượng mô hình
+def show_model_performance():
+    y_pred = model.predict(X_test)
+    r2 = r2_score(y_test, y_pred)
+    mae = mean_absolute_error(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    nse_value = nse(y_test.flatten(), y_pred.flatten())
+
+    performance_text.set(f"R²: {r2} | MAE: {mae} | RMSE: {rmse} | NSE :{nse_value}")
 # Hàm tải dữ liệu dự đoán
 def load_predict_data():
-    global X_new, Y_new, new_data
+    global X_test_new, y_test_new, new_data,data_scaled
     file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
     if file_path:
         new_data = pd.read_csv(file_path)
         new_data.set_index('Ngay', inplace=True)
-        new_data_scaled = scaler.transform(new_data)
-
-        sequence_length = 1
-        X_new, Y_new = [], []
-        for i in range(sequence_length, len(new_data_scaled)):
-            X_new.append(new_data_scaled[i-sequence_length:i])
-            Y_new.append(new_data_scaled[i])
-        X_new = np.array(X_new)
-        Y_new = np.array(Y_new)
+        data_scaled = scaler.transform(new_data)
+        X_test_new, y_test_new = create_sequences(data_scaled,sequence_length)
+        X_test_new = np.reshape(X_test_new, (X_test_new.shape[0], X_test_new.shape[1], X_test_new.shape[2]))
         messagebox.showinfo("Thông báo", "Dữ liệu dự đoán đã được tải thành công.")
         
+def update_data():
+    global predictions_new_original,y_test_new_original
+    predictions_new = model.predict(X_test_new)
+# Đưa dự đoán về dạng 2D
+    predictions_new_reshaped = predictions_new.reshape(-1, predictions_new.shape[-1])  # Chuyển thành 2D
+# Số cột từ scaler
+    num_columns = data_scaled.shape[1]
+# Tạo mảng đủ cột để kết hợp
+    zeros_to_add = np.zeros((predictions_new_reshaped.shape[0], num_columns - predictions_new_reshaped.shape[1]))
+# Chuyển đổi giá trị dự đoán về kích thước ban đầu
+    predictions_new_original = scaler.inverse_transform(
+    np.concatenate((predictions_new_reshaped, zeros_to_add), axis=1)
+)[:, 0]  # Lấy cột đầu tiên cho mực nước
+# G iả sử y_test_new có kích thước (num_samples, 1)
+    y_test_new_original = y_test_new.reshape(-1, 1)  # Chuyển thành 2D nếu cần
+
+# Tạo mảng đủ cột để kết hợp cho y_test_new
+    zeros_to_add_y_test = np.zeros((y_test_new_original.shape[0], num_columns - 1))  # Số cột - 1 vì y_test_new chỉ có 1 cột
+
+# Chuyển đổi giá trị thực tế về kích thước ban đầu
+    y_test_new_original = scaler.inverse_transform(
+    np.concatenate((y_test_new_original, zeros_to_add_y_test), axis=1)
+)[:, 0]
+    
 # Hàm dự đoán và hiển thị kết quả
 def predict_and_show():
-    predictions = model.predict(X_new)
-    predictions_original = scaler.inverse_transform(predictions)[:, 0]
-    y_test_original = scaler.inverse_transform(Y_new)[:, 0]
     # Hiển thị kết quả dự báo trong bảng
     # Cắt mảng ngày tháng từ sequence_length
     dates = new_data.index[sequence_length:]
     # Đảm bảo độ dài của mảng ngày, thực tế và dự báo khớp
-    min_length = min(len(dates), len(predictions_original), len(y_test_original))
+    min_length = min(len(dates), len(predictions_new_original), len(y_test_new_original))
     dates = dates[:min_length]
-    predictions_new_original = predictions_original[:min_length]
-    y_test_new_original = y_test_original[:min_length]
+    predictions_to_show = predictions_new_original[:min_length]
+    y_to_show = y_test_new_original[:min_length]
     df_results = pd.DataFrame({
         'Ngày': dates,
-        'Thực tế': y_test_new_original,
-        'Dự đoán': predictions_new_original
+        'Thực tế': y_to_show,
+        'Dự đoán': predictions_to_show
     })
     for item in tree.get_children():
         tree.delete(item)
@@ -258,19 +282,18 @@ def predict_and_show():
     # Thêm dữ liệu vào bảng
     for row in df_results.itertuples():
         tree.insert("", tk.END, values=row[1:])
+canvas = None
 def showChart():
-    predictions = model.predict(X_new)
-    predictions_original = scaler.inverse_transform(predictions)[:, 0]
-    y_test_original = scaler.inverse_transform(Y_new)[:, 0]
-    min_length = min(len(new_data.index), len(y_test_original), len(predictions_original))
+    global canvas
+    min_length = min(len(new_data.index), len(y_test_new_original), len(predictions_new_original))
     dates = new_data.index[:min_length]
     dates = pd.to_datetime(dates, format='%d/%m/%Y')
-    predictions_new_original = predictions_original[:min_length]
-    y_test_new_original = y_test_original[:min_length]
+    predictions_original = predictions_new_original[:min_length]
+    y_test_original =y_test_new_original[:min_length]
     
     fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(dates, y_test_new_original, label='Thực tế', color='blue')
-    ax.plot(dates, predictions_new_original, label='Dự báo', color='red')
+    ax.plot(dates, y_test_original, label='Thực tế', color='blue')
+    ax.plot(dates, predictions_original, label='Dự báo', color='red')
     ax.set_xlabel('Thời gian')
     ax.set_ylabel('Mực nước')
 
@@ -279,6 +302,8 @@ def showChart():
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax.legend()
     fig.autofmt_xdate()
+    if canvas is not None:
+        canvas.get_tk_widget().destroy()
     canvas = FigureCanvasTkAgg(fig, master=root)  # root là cửa sổ Tkinter
     canvas.draw()
     canvas.get_tk_widget().pack()
@@ -324,12 +349,12 @@ for col in ["Ngày", "Thực tế", "Dự đoán"]:
 # Đặt Treeview trong cửa sổ
 tree.pack(expand=True, fill='both')
 # Nút dự đoán
-predict_button = tk.Button(root, text="Bảng dự đoán", command=predict_and_show)
+predict_button = tk.Button(root, text="Bảng dự đoán", command=lambda: [update_data(), predict_and_show()])
 predict_button.pack(pady=10)
 
 
 
-predict_button = tk.Button(root, text="Biểu đồ dự đoán ", command=showChart)
+predict_button = tk.Button(root, text="Biểu đồ dự đoán ", command=lambda:[update_data(),showChart()])
 predict_button.pack(pady=10)
 
 # Chạy giao diện Tkinter
