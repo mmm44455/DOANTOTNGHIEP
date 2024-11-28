@@ -56,6 +56,9 @@ def train_model(selected_model,X_train, y_train,X_test, y_test,performance_text)
     model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test), callbacks=[early_stopping],verbose=1,
     shuffle=True)
     messagebox.showinfo("Thông báo", "Huấn luyện mô hình thành công.")
-    model.save('my_model.h5')
+    if selected_model.get() in ["MultiAttention", "LSTM"]:
+        model.save('my_model.h5')
+    else:
+        model.save("my_model1.h5")
     show_model_performance(X_test,y_test,model,performance_text)
     

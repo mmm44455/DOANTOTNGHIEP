@@ -5,6 +5,7 @@ from utils.model import train_model
 from utils.attention_layers import DropAttention,GlobalSelfAttention
 from utils.update_predict import update_data, predict_and_show, showChart
 from tensorflow.keras.models import load_model
+from utils.attention_layers import DropAttention,GlobalSelfAttention
 # Tạo giao diện Tkinter
 root = tk.Tk()
 root.title("Dự đoán Mực nước")
@@ -52,7 +53,13 @@ performance_label.pack(pady=5)
 
 def handle_load_predict_data():
     X_test_new, y_test_new, new_data, data_scaled = load_predict_data()
-    model = load_model('my_model.h5')
+    if selected_model.get() in ["MultiAttention", "LSTM"]:
+        model = load_model('my_model.h5')
+    else :
+        model = load_model('my_model1.h5', custom_objects={
+    'DropAttention': DropAttention,
+    'GlobalSelfAttention': GlobalSelfAttention
+})
     if X_test_new is not None:
         # Lưu dữ liệu và mô hình vào predict_data để có thể sử dụng ở các bước sau
         predict_data["X_test_new"] = X_test_new
